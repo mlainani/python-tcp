@@ -2,12 +2,16 @@
 
 import argparse
 from datetime import datetime
+import csv
 import os
 import pexpect
+import re
 import sys
 import time
 
-def run_test(dirname='', ifname=''):
+throughputs = []
+
+def run_test(dirname, ifname, throughputs):
         now = datetime.now()
         metrics_filename = dirname + '/startup_metrics_' + now.strftime(fmt) + '.txt'
         capture_filename = dirname + '/westwood_1MB_' + now.strftime(fmt) + '.pcapng'
@@ -25,7 +29,11 @@ def run_test(dirname='', ifname=''):
 
         # Connect to the client PC and start packet capture
         capture = pexpect.spawn('/bin/bash', timeout=10)
-        capture.expect_exact('mlainani@orion:~$')
+        
+        # Set command prompt to something more unique
+        COMMAND_PROMPT = r"\[PEXPECT\]\$ "
+        capture.sendline(r"PS1='[PEXPECT]\$ '")
+        capture.expect(COMMAND_PROMPT)
         cmd = 'tshark -i ' + ifname + ' -w ' + capture_filename + ' host bbbb::1 and tcp'
         capture.sendline(cmd)
 
@@ -33,9 +41,10 @@ def run_test(dirname='', ifname=''):
         # Transfering 1MB with OFDM 600 normally takes about 240secs
         # (4mins)
         client = pexpect.spawn('/bin/bash', timeout=360)
-        client.expect_exact('mlainani@orion:~$ ')
+        client.sendline (r"PS1='[PEXPECT]\$ '")
+        client.expect(COMMAND_PROMPT)
         client.sendline('sock -6 -i -n 1 -w 1000000 -S 500000 -X 1060 bbbb::1 6666')
-        ret = client.expect_exact('mlainani@orion:~$ ')
+        ret = client.expect(COMMAND_PROMPT)
         if ret == 0:
                 print 'Client has finished\n'
                 client.kill(1)
@@ -53,7 +62,7 @@ def run_test(dirname='', ifname=''):
 
         # Stop packet capture
         capture.sendcontrol('c');
-        ret = capture.expect_exact('mlainani@orion:~$ ')
+        ret = capture.expect(COMMAND_PROMPT)
         if ret == 0:
                 print 'Packet capture was stopped\n'
         capture.kill(1)
@@ -63,6 +72,14 @@ def run_test(dirname='', ifname=''):
         fout = open(trace_filename, 'wt')
         fout.write(pexpect.run(cmd))
         fout.close()
+        for line in pexpect.run(cmd).split('\r\n'):
+                m = re.search(r'\s+(\d+)\sBps.+\s+(\d+)\sBps', line)
+                if m is not None:
+                        # print m.groups()
+                        for val in m.groups():
+                                if int(val) > 0:
+                                        throughputs.append(int(val))
+
 
 if __name__ == "__main__":
         parser = argparse.ArgumentParser(
@@ -159,7 +176,15 @@ connection on /dev/ttyUSB2
         dirname += '/tcp_' + modulation_name + '_' + now.strftime(fmt)
         os.mkdir(dirname)
 
+        results_filename = dirname + '/' + modulation_name + '_' + now.strftime(fmt) + '.csv'
+
         for num in range(numiter):
                 print 'Iteration number ' + str(num)
-                run_test(dirname, ifname)
+                run_test(dirname, ifname, throughputs)
+                print throughputs
                 time.sleep(interval)
+
+        # Create results file
+        with open(results_filename, 'w') as f:
+                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+                writer.writerow(throughputs)
