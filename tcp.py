@@ -9,7 +9,13 @@ import re
 import sys
 import time
 
-throughputs = []
+throughputs = ['Throughput (bits/sec)']
+
+# TCP metrics lists
+rtts = ['RTT']
+rttvars = ['RTT var']
+cwnds = ['Cwnd']
+ssthreshs = ['Ssthresh']
 
 def run_test(dirname, ifname, throughputs):
         now = datetime.now()
@@ -17,9 +23,23 @@ def run_test(dirname, ifname, throughputs):
         capture_filename = dirname + '/westwood_1MB_' + now.strftime(fmt) + '.pcapng'
         trace_filename = dirname + '/trace_output_' + now.strftime(fmt) + '.txt'
 
+        # Collect startup TCP metrics if any
+        cmd = 'ip -6 tcp_metrics list bbbb::1'
         fout = open(metrics_filename, 'wt')
-        fout.write(pexpect.run('ip -6 tcp_metrics list bbbb::1'))
+        line = pexpect.run(cmd)
+        fout.write(line)
         fout.close()
+        m = re.search(r'rtt\s(\d+)us\srttvar\s(\d+)us\sssthresh\s(\d+)\scwnd\s(\d+)', line)
+        if m is not None:
+                rtts.append(int(m.groups()[0]) / 1000)
+                rttvars.append(int(m.groups()[1]) / 1000)
+                ssthreshs.append(m.groups()[2])
+                cwnds.append(m.groups()[3])
+        else:
+                rtts.append(None)
+                rttvars.append(None)
+                ssthreshs.append(None)
+                cwnds.append(None)
 
         # Connect to the server PC and start a TCP server instance
         server = pexpect.spawn('screen /dev/ttyUSB2 115200', timeout=360)
@@ -39,7 +59,7 @@ def run_test(dirname, ifname, throughputs):
 
         # Start TCP client and wait for it to finish
         # Transfering 1MB with OFDM 600 normally takes about 240secs
-        # (4mins)
+        # (4mins) in a network comprised of two devices
         client = pexpect.spawn('/bin/bash', timeout=360)
         client.sendline (r"PS1='[PEXPECT]\$ '")
         client.expect(COMMAND_PROMPT)
@@ -182,9 +202,21 @@ connection on /dev/ttyUSB2
                 print 'Iteration number ' + str(num)
                 run_test(dirname, ifname, throughputs)
                 print throughputs
+                print rtts
+                print rttvars
+                print ssthreshs
+                print cwnds
                 time.sleep(interval)
 
         # Create results file
         with open(results_filename, 'w') as f:
                 writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-                writer.writerow(throughputs)
+                rows = zip(throughputs, rtts, rttvars, ssthreshs, cwnds)
+                for row in rows:
+                        writer.writerow(row)
+
+                # writer.writerow(throughputs)
+                # writer.writerow(rtts)
+                # writer.writerow(rttvars)
+                # writer.writerow(ssthreshs)
+                # writer.writerow(cwnds)
